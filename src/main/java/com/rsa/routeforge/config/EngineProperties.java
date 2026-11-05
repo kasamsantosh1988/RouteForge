@@ -22,6 +22,7 @@ public class EngineProperties {
     private final Parallel parallel = new Parallel();
     private final Downstream downstream = new Downstream();
     private final Audit audit = new Audit();
+    private final Encryption encryption = new Encryption();
 
     public Http getHttp() { return http; }
     public ConfigValidation getConfig() { return config; }
@@ -29,6 +30,7 @@ public class EngineProperties {
     public Parallel getParallel() { return parallel; }
     public Downstream getDownstream() { return downstream; }
     public Audit getAudit() { return audit; }
+    public Encryption getEncryption() { return encryption; }
 
     /**
      * Whether this route must report HTTP 200 on the wire regardless of the logical outcome.
@@ -169,5 +171,27 @@ public class EngineProperties {
         public void setPoolSize(int v) { this.poolSize = v; }
         public int getQueueCapacity() { return queueCapacity; }
         public void setQueueCapacity(int v) { this.queueCapacity = v; }
+    }
+
+    public static class Encryption {
+
+        private boolean enabled = false;
+        private String profile;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getProfile() {
+            return profile;
+        }
+
+        public void setProfile(String profile) {
+            this.profile = profile;
+        }
     }
 }
