@@ -15,10 +15,8 @@ import java.util.*;
 @Component
 public class RouteConfigLoader {
 
-    @Value("${apache.camel.route.config.path}")
-    private String ROUTES_DIR_PATTERN;
-
     private static final Logger log = LoggerFactory.getLogger(RouteConfigLoader.class);
+    //private static final String ROUTES_DIR_PATTERN = "classpath:bimasugamroutes_config/*.json";
     private final ObjectMapper objectMapper;
     private final RouteConfigValidator validator;
     private final EngineProperties engineProperties;
@@ -61,7 +59,6 @@ public class RouteConfigLoader {
                 TransactionConfig cfg;
                 try (InputStream is = resource.getInputStream()) {
                     cfg = objectMapper.readValue(is, TransactionConfig.class);
-                    cfg = applyDefaultEncryptionProfile(cfg);
                 } catch (Exception e) {
                     problems.add(fileName + ": not valid route config JSON — " + e.getMessage());
                     continue;
@@ -113,28 +110,5 @@ public class RouteConfigLoader {
         return path.endsWith("/") && path.length() > 1
                 ? path.substring(0, path.length() - 1)
                 : path;
-    }
-
-    private TransactionConfig applyDefaultEncryptionProfile(TransactionConfig cfg) {
-        if (cfg == null) {
-            return null;
-        }
-        String encryptionProfile = cfg.encryptionProfile();
-        if (!engineProperties.getEncryption().isEnabled()) {
-            encryptionProfile = null;
-
-        }
-        return new TransactionConfig(
-                cfg.routeId(),
-                cfg.path(),
-                cfg.partnerCode(),
-                cfg.requestJoltSpec(),
-                cfg.steps(),
-                cfg.responseJoltSpec(),
-                encryptionProfile,
-                cfg.httpMethod(),
-                cfg.responseJoltSpecRules(),
-                cfg.openApiValidation()
-        );
     }
 }
