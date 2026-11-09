@@ -10,9 +10,15 @@
     </parent>
     <groupId>com.rsa</groupId>
     <artifactId>rsa-routeforge</artifactId>
-    <version>1.0</version>
+    <version>1.0.1</version>
     <name>RSA-RouteForge</name>
     <description>RSA-RouteForge</description>
+    <distributionManagement>
+        <repository>
+            <id>RSGI-Artifactory</id>
+            <url>https://pkgs.dev.azure.com/Royalsundaram/_packaging/RSGI-Artifactory/maven/v1</url>
+        </repository>
+    </distributionManagement>
     <url/>
     <licenses>
         <license/>
