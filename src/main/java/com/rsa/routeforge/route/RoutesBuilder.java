@@ -9,15 +9,22 @@ import com.rsa.routeforge.config.RouteConfigLoader;
 import com.rsa.routeforge.config.TransactionConfig;
 import com.rsa.routeforge.error.ErrorEnvelopeFactory;
 import com.rsa.routeforge.error.OrchestrationException;
+import com.rsa.routeforge.soap.SoapEndpoint;
+import com.rsa.routeforge.soap.SoapRouteConfig;
+import com.rsa.routeforge.soap.SoapService;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.camel.Exchange;
 import org.apache.camel.builder.RouteBuilder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.env.Environment;
+import org.springframework.core.io.ResourceLoader;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 
 @Slf4j
@@ -33,6 +40,10 @@ public class RoutesBuilder extends RouteBuilder {
     private OrchestrationEngine orchestrationEngine;
     @Autowired
     private Environment env;
+    @Autowired
+    private RouteForgeProperties routeForgeProperties;
+    @Autowired
+    private ResourceLoader resourceLoader;
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -74,11 +85,40 @@ public class RoutesBuilder extends RouteBuilder {
                 .setHeader(Exchange.HTTP_RESPONSE_CODE, constant(200))
                 .setBody(constant(ErrorEnvelopeFactory.FALLBACK_ERROR_JSON));
 
+        // SOAP operations that share a path become one endpoint; insertion order keeps startup logs stable.
+        Map<String, List<TransactionConfig>> soapServices = new LinkedHashMap<>();
         for (TransactionConfig cfg : routeConfigLoader.loadConfigs()) {
             // Resolve all property placeholders in URIs before building the route
             TransactionConfig resolvedConfig = resolveUrisInConfig(cfg);
-            defineRoute(this, resolvedConfig, orchestrationEngine);
+            if (resolvedConfig.isSoap()) {
+                soapServices.computeIfAbsent(normalizePath(resolvedConfig.path()), k -> new ArrayList<>()).add(resolvedConfig);
+            } else {
+                defineRoute(this, resolvedConfig, orchestrationEngine);
+            }
         }
+        soapServices.forEach((path, operations) -> {
+            SoapService service = new SoapService(path, operations);
+            defineSoapService(this, service, new SoapEndpoint(service, orchestrationEngine,
+                    routeForgeProperties.getSoap().limits(), resourceLoader));
+            log.info("SOAP service {} with {} operation(s): {}", path, operations.size(),
+                    operations.stream().map(TransactionConfig::routeId).toList());
+        });
+    }
+
+    /**
+     * One Camel route per SOAP service path. Unlike REST routes there is no JSON content-type
+     * check and no method restriction: {@link SoapEndpoint} answers {@code GET ?wsdl} itself and
+     * turns any other non-POST request into a SOAP fault.
+     */
+    public static void defineSoapService(RouteBuilder builder, SoapService service, SoapEndpoint endpoint) {
+        builder.from("platform-http:" + service.path() + "?muteException=true")
+                .routeId(service.routeId())
+                .process(RoutesBuilder::captureInboundHttpMetadata)
+                .process(endpoint::process);
+    }
+
+    private static String normalizePath(String path) {
+        return path != null && path.endsWith("/") && path.length() > 1 ? path.substring(0, path.length() - 1) : path;
     }
 
     private TransactionConfig resolveUrisInConfig(TransactionConfig config) {
@@ -96,8 +136,21 @@ public class RoutesBuilder extends RouteBuilder {
                 config.encryptionProfile(),
                 config.httpMethod(),
                 config.responseJoltSpecRules(),
-                config.openApiValidation()
+                config.openApiValidation(),
+                config.channel(),
+                resolveSoap(config.soap())
         );
+    }
+
+    /** Property placeholders are allowed in the WSDL location and public URL, e.g. ${pie.public-url}. */
+    private SoapRouteConfig resolveSoap(SoapRouteConfig soap) {
+        if (soap == null) {
+            return null;
+        }
+        return new SoapRouteConfig(soap.operation(), soap.namespaces(), soap.lenientNamespaces(), soap.fields(),
+                soap.auth(), soap.response(),
+                soap.wsdl() == null ? null : env.resolvePlaceholders(soap.wsdl()),
+                soap.publicUrl() == null ? null : env.resolvePlaceholders(soap.publicUrl()));
     }
 
     /**

@@ -13,6 +13,14 @@ public enum ErrorCode {
     VALIDATION_FAILED(400, "One or more request fields are invalid."),
     MALFORMED_REQUEST_BODY(400, "Request body is not valid JSON."),
 
+    // ---- SOAP channel (client-caused) ----------------------------------------
+    SOAP_MALFORMED(400, "The request is not a valid SOAP 1.1 message."),
+    SOAP_VERSION_MISMATCH(400, "Only SOAP 1.1 is supported."),
+    SOAP_REQUEST_TOO_LARGE(400, "The request exceeds the allowed size."),
+    SOAP_UNKNOWN_OPERATION(400, "The requested operation is not supported."),
+    SOAP_UNSUPPORTED_MEDIA_TYPE(400, "Content-Type must be text/xml."),
+    AUTHENTICATION_FAILED(401, "Authentication failed."),
+
     // ---- Downstream (5xx) ----------------------------------------------------
     DOWNSTREAM_TIMEOUT(504, "An upstream service did not respond in time."),
     DOWNSTREAM_UNAVAILABLE(502, "An upstream service is unavailable."),

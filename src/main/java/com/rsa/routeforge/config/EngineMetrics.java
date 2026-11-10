@@ -83,6 +83,18 @@ public class EngineMetrics {
                 .record(System.currentTimeMillis() - startMillis, TimeUnit.MILLISECONDS);
     }
 
+    /**
+     * A SOAP fault was returned. {@code faultCode} is {@code Client}, {@code Server} or
+     * {@code VersionMismatch}; {@code errorCode} is the engine's code, which is low-cardinality.
+     */
+    public void recordSoapFault(String routeId, String faultCode, String errorCode) {
+        if (registry == null) return;
+        registry.counter("engine.soap.faults",
+                "route", nullSafe(routeId),
+                "fault", nullSafe(faultCode),
+                "code", nullSafe(errorCode)).increment();
+    }
+
     private static String nullSafe(String value) {
         return value == null ? "unknown" : value;
     }

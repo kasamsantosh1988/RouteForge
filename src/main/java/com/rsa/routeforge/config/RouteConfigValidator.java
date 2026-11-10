@@ -1,6 +1,10 @@
 package com.rsa.routeforge.config;
 
 import com.rsa.routeforge.error.OrchestrationException;
+import com.rsa.routeforge.soap.QNames;
+import com.rsa.routeforge.soap.SoapAuthConfig;
+import com.rsa.routeforge.soap.SoapResponseConfig;
+import com.rsa.routeforge.soap.SoapRouteConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -11,6 +15,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -74,6 +79,8 @@ public class RouteConfigValidator {
 
         // A null steps list is legal — bima_routes-config.json relies on it for a passthrough route.
         validateSteps(cfg.steps(), where, "steps", 0, errors);
+
+        validateChannel(cfg, where, errors);
 
         if (!errors.isEmpty()) {
             log.warn("Route validation failed: file={}, routeId={}, errors={}",fileName, cfg.routeId(), errors.size());
@@ -198,6 +205,110 @@ public class RouteConfigValidator {
         }
         if (step.method() != null && !ALLOWED_METHODS.contains(step.method().toUpperCase())) {
             errors.add(where + " " + at + ": unsupported method '" + step.method() + "'");
+        }
+    }
+
+    /**
+     * {@code channel} and the {@code soap} block. REST routes (no channel, or {@code rest}) are
+     * checked only for a stray {@code soap} block, so existing route files are unaffected.
+     */
+    private void validateChannel(TransactionConfig cfg, String where, List<String> errors) {
+        if (cfg.channel() != null && !TransactionConfig.CHANNELS.contains(cfg.channel())) {
+            errors.add(where + ": unknown channel '" + cfg.channel() + "', expected one of " + TransactionConfig.CHANNELS);
+            return;
+        }
+        if (!cfg.isSoap()) {
+            if (cfg.soap() != null) {
+                errors.add(where + ": a soap block is only valid with \"channel\": \"soap\"");
+            }
+            return;
+        }
+
+        SoapRouteConfig soap = cfg.soap();
+        if (soap == null) {
+            errors.add(where + ": channel soap requires a soap block");
+            return;
+        }
+        if (cfg.httpMethod() != null && !"POST".equalsIgnoreCase(cfg.httpMethod())) {
+            errors.add(where + ": SOAP operations are POST only; httpMethod was '" + cfg.httpMethod() + "'");
+        }
+        if (cfg.encryptionProfile() != null) {
+            errors.add(where + ": encryptionProfile is not supported on SOAP routes");
+        }
+        if (cfg.openApiValidation() != null) {
+            errors.add(where + ": openApiValidation is not supported on SOAP routes");
+        }
+
+        Map<String, String> ns = soap.namespacesOrEmpty();
+        ns.forEach((prefix, uri) -> {
+            if (isBlank(prefix) || isBlank(uri)) {
+                errors.add(where + ": soap.namespaces has a blank prefix or URI");
+            }
+        });
+        checkQName(soap.operation(), ns, where + ": soap.operation", errors);
+
+        Map<String, String> fields = soap.fieldsOrEmpty();
+        if (fields.isEmpty()) {
+            errors.add(where + ": soap.fields is empty, so the operation passes no input to its steps");
+        }
+        fields.forEach((name, path) -> {
+            if (isBlank(name) || isBlank(path)) {
+                errors.add(where + ": soap.fields has a blank name or path");
+                return;
+            }
+            for (String step : path.split("/")) {
+                checkQName(step, ns, where + ": soap.fields." + name, errors);
+            }
+        });
+
+        String authType = soap.authType();
+        if (!SoapAuthConfig.TYPES.contains(authType)) {
+            errors.add(where + ": unknown soap.auth.type '" + authType + "', expected one of " + SoapAuthConfig.TYPES);
+        } else if (SoapAuthConfig.BODY_CREDENTIALS.equals(authType)) {
+            SoapAuthConfig auth = soap.auth();
+            if (isBlank(auth.user()) || !fields.containsKey(auth.user())) {
+                errors.add(where + ": soap.auth.user must name an entry of soap.fields");
+            }
+            if (isBlank(auth.password()) || !fields.containsKey(auth.password())) {
+                errors.add(where + ": soap.auth.password must name an entry of soap.fields");
+            }
+        }
+
+        SoapResponseConfig response = soap.response();
+        if (response == null) {
+            errors.add(where + ": soap.response is required");
+        } else {
+            checkQName(response.element(), ns, where + ": soap.response.element", errors);
+            if (isBlank(response.returnElement()) || response.returnElement().contains(":")) {
+                errors.add(where + ": soap.response.returnElement must be a local name without prefix");
+            }
+            if (response.prefixStyle() != null && !SoapResponseConfig.PREFIX_STYLES.contains(response.prefixStyle())) {
+                errors.add(where + ": soap.response.prefixStyle must be one of " + SoapResponseConfig.PREFIX_STYLES);
+            }
+            if (response.returnEncoding() != null && !SoapResponseConfig.ENCODINGS.contains(response.returnEncoding())) {
+                errors.add(where + ": soap.response.returnEncoding must be one of " + SoapResponseConfig.ENCODINGS);
+            }
+            if (response.returnType() != null && !SoapResponseConfig.RETURN_TYPES.contains(response.returnType())) {
+                errors.add(where + ": soap.response.returnType must be one of " + SoapResponseConfig.RETURN_TYPES);
+            }
+        }
+
+        if (!isBlank(soap.wsdl())) {
+            try {
+                if (!applicationContext.getResource(soap.wsdl()).exists()) {
+                    errors.add(where + ": soap.wsdl '" + soap.wsdl() + "' not found");
+                }
+            } catch (Exception e) {
+                errors.add(where + ": soap.wsdl '" + soap.wsdl() + "' cannot be resolved: " + e.getMessage());
+            }
+        }
+    }
+
+    private static void checkQName(String name, Map<String, String> namespaces, String label, List<String> errors) {
+        try {
+            QNames.resolve(name, namespaces);
+        } catch (IllegalArgumentException e) {
+            errors.add(label + ": " + e.getMessage());
         }
     }
 

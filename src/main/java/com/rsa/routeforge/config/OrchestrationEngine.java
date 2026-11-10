@@ -13,6 +13,9 @@ import com.rsa.routeforge.auth.AuthTokenProvider;
 import com.rsa.routeforge.crypto.CipherRegistry;
 import com.rsa.routeforge.crypto.EncryptedEnvelope;
 import com.rsa.routeforge.crypto.PayloadCipher;
+import com.rsa.routeforge.inbound.InboundCodec;
+import com.rsa.routeforge.inbound.InboundCodecRegistry;
+import com.rsa.routeforge.inbound.JsonCodec;
 import com.rsa.routeforge.openapi.OpenApiValidationConfig;
 import com.rsa.routeforge.openapi.OpenApiValidatorRegistry;
 import com.rsa.routeforge.partner.PartnerResolverService;
@@ -26,6 +29,7 @@ import org.apache.camel.ProducerTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationContext;
@@ -52,21 +56,12 @@ public class OrchestrationEngine {
     private static final Logger log = LoggerFactory.getLogger(OrchestrationEngine.class);
     private static final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\{\\{([^}]+)\\}\\}");
 
-    private static final String CORRELATION_HEADER = "X-Correlation-Id";
-    private static final String ENGINE_STATUS_HEADER = "X-Engine-Status";
+    private static final String CORRELATION_HEADER = com.rsa.routeforge.inbound.EngineHeaders.CORRELATION_HEADER;
 
     /**
      * Methods for which a request body is not sent — some servers reject a GET with a body.
      */
     private static final Set<String> BODYLESS_METHODS = Set.of("GET", "DELETE", "HEAD", "OPTIONS");
-
-    private static final Set<String> NON_QUERY_HEADERS = Set.of(
-            "Accept", "Accept-Encoding", "Accept-Language", "Connection", "Content-Type",
-            "Content-Length", "Host", "User-Agent", "Postman-Token", "Cache-Control",
-            "CamelHttpMethod", "CamelHttpPath", "CamelHttpQuery", "CamelHttpUri",
-            "CamelPlatformHttpContextPath", "CamelHttpResponseCode", "breadcrumbId",
-            CORRELATION_HEADER, "Authorization"
-    );
 
     private final ProducerTemplate producerTemplate;
     private final ApplicationContext applicationContext;
@@ -84,8 +79,21 @@ public class OrchestrationEngine {
     private final StepCallAuditWriter stepCallAuditWriter;
     private final PartnerResolverService partnerResolverService;
     private final OpenApiValidatorRegistry openApiValidatorRegistry;
+    private final InboundCodecRegistry codecs;
 
-    public OrchestrationEngine(ExceptionTranslator translator, ProducerTemplate producerTemplate, ApplicationContext applicationContext, JoltTransformer joltTransformer, ObjectMapper objectMapper, EngineProperties props, ErrorEnvelopeFactory envelopes, EngineMetrics metrics, StepCallAuditWriter stepCallAuditWriter, RouteAuditWriter auditWriter, AuditPayloadSanitizer auditSanitizer, CipherRegistry cipherRegistry, AuthTokenProvider authTokenProvider, @Qualifier("engineParallelExecutor") ExecutorService parallelExecutor, PartnerResolverService partnerResolverService, OpenApiValidatorRegistry openApiValidatorRegistry) {
+    /**
+     * Pre-codec constructor, kept so code that builds the engine by hand keeps compiling. Every
+     * route uses the JSON wire format.
+     */
+    public OrchestrationEngine(ExceptionTranslator translator, ProducerTemplate producerTemplate, ApplicationContext applicationContext, JoltTransformer joltTransformer, ObjectMapper objectMapper, EngineProperties props, ErrorEnvelopeFactory envelopes, EngineMetrics metrics, StepCallAuditWriter stepCallAuditWriter, RouteAuditWriter auditWriter, AuditPayloadSanitizer auditSanitizer, CipherRegistry cipherRegistry, AuthTokenProvider authTokenProvider, ExecutorService parallelExecutor, PartnerResolverService partnerResolverService, OpenApiValidatorRegistry openApiValidatorRegistry) {
+        this(translator, producerTemplate, applicationContext, joltTransformer, objectMapper, props, envelopes, metrics,
+                stepCallAuditWriter, auditWriter, auditSanitizer, cipherRegistry, authTokenProvider, parallelExecutor,
+                partnerResolverService, openApiValidatorRegistry,
+                new InboundCodecRegistry(List.of(new JsonCodec(objectMapper, props, envelopes, cipherRegistry))));
+    }
+
+    @Autowired
+    public OrchestrationEngine(ExceptionTranslator translator, ProducerTemplate producerTemplate, ApplicationContext applicationContext, JoltTransformer joltTransformer, ObjectMapper objectMapper, EngineProperties props, ErrorEnvelopeFactory envelopes, EngineMetrics metrics, StepCallAuditWriter stepCallAuditWriter, RouteAuditWriter auditWriter, AuditPayloadSanitizer auditSanitizer, CipherRegistry cipherRegistry, AuthTokenProvider authTokenProvider, @Qualifier("engineParallelExecutor") ExecutorService parallelExecutor, PartnerResolverService partnerResolverService, OpenApiValidatorRegistry openApiValidatorRegistry, InboundCodecRegistry codecs) {
 
         this.translator = translator;
         this.producerTemplate = producerTemplate;
@@ -103,6 +111,7 @@ public class OrchestrationEngine {
         this.parallelExecutor = parallelExecutor;
         this.partnerResolverService = partnerResolverService;
         this.openApiValidatorRegistry = openApiValidatorRegistry;
+        this.codecs = codecs;
     }
     // ============================================================
     // Entry point — the single error boundary
@@ -122,11 +131,13 @@ public class OrchestrationEngine {
         // Built before the try so the record exists for every outcome, including one thrown by the
         // very first statement inside it. newAuditRecord absorbs its own failures for that reason.
         RouteAuditRecord audit = newAuditRecord(cfg, exchange, traceId, startTime);
+        // Resolved before the try: the error path needs a codec too. resolve() never throws.
+        InboundCodec codec = codecs.resolve(cfg);
         String uuid = "";
         try {
             log.info(">>> Route START");
 
-            // Read once, here rather than inside parseIncoming, so a body too malformed to parse is
+            // Read once, here rather than inside the codec, so a body too malformed to parse is
             // still on the audit row when the 400 goes out — that payload is the whole point of the
             // audit for a rejected request.
             String rawBody = exchange.getIn().getBody(String.class);
@@ -135,7 +146,7 @@ public class OrchestrationEngine {
             }
 
             Map<String, Object> ctx = new HashMap<>();
-            Map<String, Object> parsedInput = parseIncoming(cfg, exchange, rawBody);
+            Map<String, Object> parsedInput = codec.parseRequest(cfg, exchange, rawBody);
             ctx.put("rawInput", parsedInput);
             if (cfg.openApiValidation() != null)
                 openApiValidation(cfg.openApiValidation(), ctx, exchange);
@@ -172,7 +183,7 @@ public class OrchestrationEngine {
             if (audit != null) {
                 audit.setOutcome(RouteAuditRecord.OUTCOME_SUCCESS);
             }
-            writeResponse(exchange, envelopes.success(finalBody, uuid), 200, cfg, traceId, audit);
+            codec.writeSuccess(exchange, cfg, finalBody, uuid, traceId, audit);
             metrics.recordSuccess(cfg.routeId(), startTime);
             log.info("<<< Route SUCCESS in {} ms", System.currentTimeMillis() - startTime);
 
@@ -199,8 +210,7 @@ public class OrchestrationEngine {
             }
 
             metrics.recordFailure(cfg.routeId(), oe.getCode(), oe.getHttpStatus(), startTime);
-            writeResponse(exchange, envelopes.error(oe, traceId, failedStep, uuid),
-                    oe.getHttpStatus(), cfg, traceId, audit);
+            codec.writeError(exchange, cfg, oe, traceId, failedStep, uuid, audit);
 
         } finally {
             try {
@@ -262,125 +272,6 @@ public class OrchestrationEngine {
         String incoming = exchange.getIn().getHeader(CORRELATION_HEADER, String.class);
         return incoming != null && !incoming.isBlank() ? incoming : UUID.randomUUID().toString();
     }
-
-    /**
-     * Writes the envelope. Cannot throw — {@link ErrorEnvelopeFactory#toJson} falls back to a
-     * constant payload if serialization fails.
-     * <p>
-     * The wire status is 200 for every outcome by default (see {@code engine.http.propagate-status}),
-     * so the true status is always published as {@value #ENGINE_STATUS_HEADER} and as a metric.
-     */
-    private void writeResponse(Exchange exchange, Map<String, Object> envelope,
-                               int logicalStatus, TransactionConfig cfg, String traceId,
-                               RouteAuditRecord audit) {
-        int wireStatus = props.isAlways200(cfg.routeId()) ? 200 : logicalStatus;
-        if(audit!=null)
-        envelope.put("uuid", audit.getAuditId());
-        String json = envelopes.toJson(envelope);
-        if (cfg.encryptionProfile() != null) {
-            String plaintextJson = toJsonSafely(envelope);
-            PayloadCipher cipher = cipherRegistry.resolve(cfg.encryptionProfile());
-            EncryptedEnvelope encrypted = cipher.encrypt(plaintextJson);
-            exchange.getIn().setBody(toJsonSafely(encrypted));
-            log.info("Response envelope before serialization = {}", envelope);
-        } else {
-            exchange.getIn().setBody(toJsonSafely(envelope));
-            log.info("Response envelope before serialization = {}", envelope);
-        }
-        exchange.getIn().setHeader(Exchange.CONTENT_TYPE, "application/json");
-        exchange.getIn().setHeader("Accept", "application/json");
-        exchange.getIn().setHeader(Exchange.HTTP_RESPONSE_CODE, wireStatus);
-        exchange.getIn().setHeader(ENGINE_STATUS_HEADER, logicalStatus);
-        exchange.getIn().setHeader(CORRELATION_HEADER, traceId);
-
-        // Captured here rather than reconstructed later: this is the exact byte sequence the caller
-        // receives, including the fallback payload if serialization failed.
-        if (audit != null) {
-            audit.setResponseBody(json);
-            audit.setLogicalStatus(logicalStatus);
-            audit.setWireStatus(wireStatus);
-        }
-    }
-
-    // ============================================================
-    // Inbound parsing (body + query params)
-    // ============================================================
-
-    /**
-     * @param raw the body already read by {@code execute}. Passed in rather than re-read: the
-     *            exchange body may be a stream, and this method throws on malformed JSON before it
-     *            could hand the payload back for the audit row.
-     */
-    private Map<String, Object> parseIncoming(TransactionConfig cfg, Exchange exchange, String raw) {
-        Map<String, Object> parsedInput = new HashMap<>();
-
-
-        if (raw != null && !raw.isBlank()) {
-            if (cfg.encryptionProfile() != null) {
-                try {
-                    EncryptedEnvelope envelope = objectMapper.readValue(raw, EncryptedEnvelope.class);
-                    PayloadCipher cipher = cipherRegistry.resolve(cfg.encryptionProfile());
-                    if (envelope == null || StringUtils.isBlank(envelope.encryptedData()) || StringUtils.isBlank(envelope.keyId()))
-                        throw new OrchestrationException("INVALID_REQUEST", "INVALID ENCRYPTED REQUEST", 400);
-                    String decryptedJson = cipher.decrypt(envelope);
-                    log.info("Decrypted request body [{}]: {}", cfg.routeId(), decryptedJson);
-                    Object bodyParsed;
-                    try {
-                        bodyParsed = objectMapper.readValue(decryptedJson, Object.class);
-                    } catch (Exception e) {
-                        throw new OrchestrationException(ErrorCode.MALFORMED_REQUEST_BODY,
-                                "Request body is not valid JSON: " + e.getMessage()
-                                        + " body=" + truncate(raw), e);
-                    }
-                    if (!(bodyParsed instanceof Map<?, ?> bodyMap)) {
-                        throw new OrchestrationException(ErrorCode.MALFORMED_REQUEST_BODY,
-                                "Request body must be a JSON object but was "
-                                        + (bodyParsed == null ? "null" : bodyParsed.getClass().getSimpleName())
-                                        + " body=" + truncate(raw));
-                    }
-                    bodyMap.forEach((k, v) -> parsedInput.put(String.valueOf(k), v));
-                } catch (Exception e) {
-                    log.warn("No/invalid JSON body for [{}], continuing with query params only: {}",
-                            cfg.routeId(), e.getMessage());
-                    throw new OrchestrationException("INVALID_REQUEST", "INVALID ENCRYPTED REQUEST", 400);
-                }
-            } else {
-                try {
-                    Object bodyParsed;
-                    try {
-                        bodyParsed = objectMapper.readValue(raw, Object.class);
-                    } catch (Exception e) {
-                        throw new OrchestrationException(ErrorCode.MALFORMED_REQUEST_BODY,
-                                "Request body is not valid JSON: " + e.getMessage()
-                                        + " body=" + truncate(raw), e);
-                    }
-                    if (!(bodyParsed instanceof Map<?, ?> bodyMap)) {
-                        throw new OrchestrationException(ErrorCode.MALFORMED_REQUEST_BODY,
-                                "Request body must be a JSON object but was "
-                                        + (bodyParsed == null ? "null" : bodyParsed.getClass().getSimpleName())
-                                        + " body=" + truncate(raw));
-                    }
-                    bodyMap.forEach((k, v) -> parsedInput.put(String.valueOf(k), v));
-                } catch (Exception e) {
-                    log.warn("No/invalid JSON body for [{}], continuing with query params only: {}",
-                            cfg.routeId(), e.getMessage());
-                    throw new OrchestrationException("INVALID_REQUEST", "INVALID  REQUEST", 400);
-                }
-            }
-        }
-
-
-        Map<String, Object> headers = exchange.getIn().getHeaders();
-        headers.forEach((key, value) -> {
-            if (!NON_QUERY_HEADERS.contains(key)) {
-                parsedInput.putIfAbsent(key, value);
-            }
-        });
-
-        log.info("Merged incoming request (body + query) [{}]: {}", cfg.routeId(), parsedInput);
-        return parsedInput;
-    }
-
 
     // ============================================================
     // Step dispatch

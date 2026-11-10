@@ -2,6 +2,9 @@ package com.rsa.routeforge.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rsa.routeforge.route.RouteForgeProperties;
+import com.rsa.routeforge.soap.QNames;
+
+import javax.xml.namespace.QName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -37,6 +40,7 @@ public class RouteConfigLoader {
         List<TransactionConfig> configs = new ArrayList<>();
         Set<String> seenIds = new HashSet<>();
         Map<String, String> seenPaths = new HashMap<>(); // path -> filename that claimed it
+        Map<String, List<TransactionConfig>> soapByPath = new HashMap<>(); // SOAP service path -> its operations
         // Every problem across every file is collected, so one startup failure reports them all.
         List<String> problems = new ArrayList<>();
 
@@ -70,10 +74,21 @@ public class RouteConfigLoader {
                 }
 
                 String normalizedPath = normalizePath(cfg.path());
-                String existingFile = seenPaths.putIfAbsent(normalizedPath, fileName);
+                // SOAP operations of one service share a path; they are checked against each other
+                // below. A REST route still owns its path outright.
+                boolean soap = cfg.isSoap();
+                String existingFile = soap
+                        ? (soapByPath.containsKey(normalizedPath) ? null : seenPaths.get(normalizedPath))
+                        : seenPaths.putIfAbsent(normalizedPath, fileName); // REST: claimed before validation, as before
                 if (existingFile != null) {
                     problems.add(fileName + ": duplicate path '" + cfg.path()
                             + "' conflicts with " + existingFile);
+                    continue;
+                }
+
+                if (soap && !routeForgeProperties.getSoap().isEnabled()) {
+                    problems.add(fileName + ": route '" + cfg.routeId()
+                            + "' has channel soap but routeforge.soap.enabled=false");
                     continue;
                 }
 
@@ -81,6 +96,17 @@ public class RouteConfigLoader {
                 if (!errors.isEmpty()) {
                     problems.addAll(errors);
                     continue;
+                }
+
+                if (soap) {
+                    List<TransactionConfig> service = soapByPath.computeIfAbsent(normalizedPath, k -> new ArrayList<>());
+                    String conflict = soapServiceConflict(service, cfg);
+                    if (conflict != null) {
+                        problems.add(fileName + ": " + conflict);
+                        continue;
+                    }
+                    service.add(cfg);
+                    seenPaths.putIfAbsent(normalizedPath, fileName);
                 }
 
                 configs.add(cfg);
@@ -102,6 +128,39 @@ public class RouteConfigLoader {
         }
 
         return configs;
+    }
+
+    /**
+     * Operations that share a path are one SOAP service: one partner, one WSDL, one public URL, and
+     * each body element at most once (it is what selects the operation).
+     *
+     * @return a description of the conflict, or null when {@code cfg} fits the service
+     */
+    private static String soapServiceConflict(List<TransactionConfig> service, TransactionConfig cfg) {
+        if (service.isEmpty()) {
+            return null;
+        }
+        TransactionConfig first = service.getFirst();
+        if (!Objects.equals(first.partnerCode(), cfg.partnerCode())) {
+            return "SOAP operations on path '" + cfg.path() + "' must share partnerCode ('"
+                    + first.partnerCode() + "' in route '" + first.routeId() + "')";
+        }
+        if (!Objects.equals(first.soap().wsdl(), cfg.soap().wsdl())) {
+            return "SOAP operations on path '" + cfg.path() + "' must share soap.wsdl (route '" + first.routeId() + "')";
+        }
+        if (!Objects.equals(first.soap().publicUrl(), cfg.soap().publicUrl())) {
+            return "SOAP operations on path '" + cfg.path() + "' must share soap.publicUrl (route '" + first.routeId() + "')";
+        }
+        QName operation = QNames.resolve(cfg.soap().operation(), cfg.soap().namespacesOrEmpty());
+        for (TransactionConfig other : service) {
+            QName existing = QNames.resolve(other.soap().operation(), other.soap().namespacesOrEmpty());
+            if (existing.getNamespaceURI().equals(operation.getNamespaceURI())
+                    && existing.getLocalPart().equals(operation.getLocalPart())) {
+                return "SOAP operation " + operation + " on path '" + cfg.path()
+                        + "' is already handled by route '" + other.routeId() + "'";
+            }
+        }
+        return null;
     }
 
     // Normalizes trailing slashes so "/rsa/getquote" and "/rsa/getquote/" are treated as the same path

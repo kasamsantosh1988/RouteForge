@@ -11,6 +11,11 @@ public class RouteForgeProperties {
 
     private final Routes routes = new Routes();
     private final Admin admin = new Admin();
+    private final Soap soap = new Soap();
+
+    public Soap getSoap() {
+        return soap;
+    }
 
     public boolean isEnabled() {
         return enabled;
@@ -45,6 +50,30 @@ public class RouteForgeProperties {
 
         public void setLocation(String location) {
             this.location = location;
+        }
+    }
+
+    /** {@code routeforge.soap.*}: the SOAP channel. Off by default; route files with {@code channel: soap} need it on. */
+    public static class Soap {
+        private boolean enabled = false;
+        /** Largest request accepted, in UTF-8 bytes. */
+        private int maxBodyBytes = 1024 * 1024;
+        /** Deepest element nesting accepted, counting the Envelope as 1. */
+        private int maxDepth = 32;
+        /** Most elements accepted in one request. */
+        private int maxElements = 10_000;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public int getMaxBodyBytes() { return maxBodyBytes; }
+        public void setMaxBodyBytes(int maxBodyBytes) { this.maxBodyBytes = maxBodyBytes; }
+        public int getMaxDepth() { return maxDepth; }
+        public void setMaxDepth(int maxDepth) { this.maxDepth = maxDepth; }
+        public int getMaxElements() { return maxElements; }
+        public void setMaxElements(int maxElements) { this.maxElements = maxElements; }
+
+        public com.rsa.routeforge.soap.SoapLimits limits() {
+            return new com.rsa.routeforge.soap.SoapLimits(maxBodyBytes, maxDepth, maxElements);
         }
     }
 
