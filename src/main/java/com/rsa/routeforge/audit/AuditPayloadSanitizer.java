@@ -84,9 +84,13 @@ public class AuditPayloadSanitizer {
 
     /**
      * Replaces the values of {@code engine.audit.mask-fields} with {@value #MASK} at any depth.
-     * With no fields configured — the default — the payload is returned untouched and never parsed.
+     * With no fields configured — the default — a JSON payload is returned untouched and never
+     * parsed. An XML payload (a SOAP request or response) is always masked: see {@link #maskXml}.
      */
     private String mask(String payload) {
+        if (looksLikeXml(payload)) {
+            return maskXml(payload);
+        }
         Set<String> fields = maskFieldsLowercase();
         if (fields.isEmpty()) {
             return payload;
@@ -119,6 +123,43 @@ public class AuditPayloadSanitizer {
         } else if (node instanceof ArrayNode array) {
             array.forEach(child -> maskNode(child, fields));
         }
+    }
+
+    /** Element names masked in every XML payload, whatever {@code mask-fields} says: SOAP partners send passwords in the body. */
+    static final Set<String> XML_ALWAYS_MASKED = Set.of("password");
+
+    private static boolean looksLikeXml(String payload) {
+        for (int i = 0; i < payload.length(); i++) {
+            char c = payload.charAt(i);
+            if (c == '﻿' || Character.isWhitespace(c)) {
+                continue;
+            }
+            return c == '<';
+        }
+        return false;
+    }
+
+    /**
+     * Replaces the content of every element whose local name is in {@code mask-fields} or
+     * {@link #XML_ALWAYS_MASKED} with {@value #MASK}, whatever its prefix, matching names without
+     * regard to case. Text-based rather than parsed, so a payload that is not well-formed (a rejected
+     * request is exactly what the audit is for) is still masked instead of withheld.
+     */
+    private String maskXml(String payload) {
+        Set<String> names = new HashSet<>(XML_ALWAYS_MASKED);
+        names.addAll(maskFieldsLowercase());
+        StringBuilder alternation = new StringBuilder();
+        for (String name : names) {
+            if (!alternation.isEmpty()) {
+                alternation.append('|');
+            }
+            alternation.append(java.util.regex.Pattern.quote(name));
+        }
+        java.util.regex.Pattern element = java.util.regex.Pattern.compile(
+                "(<((?:[\\w.-]+:)?)(" + alternation + ")(?:\\s[^>]*)?>)(.*?)(</\\2\\3\\s*>)",
+                java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.DOTALL);
+        return element.matcher(payload).replaceAll(m ->
+                java.util.regex.Matcher.quoteReplacement(m.group(1) + MASK + m.group(5)));
     }
 
     private Set<String> maskFieldsLowercase() {
