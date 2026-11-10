@@ -55,6 +55,13 @@ public class RouteAdminController {
                 .orElseThrow(() -> new OrchestrationException(ErrorCode.CONFIG_ERROR,
                         "No valid route config found for routeId '" + routeId + "'"));
 
+        // A SOAP operation shares one Camel route with the other operations on its path, so it
+        // cannot be swapped on its own; a restart reloads SOAP services.
+        if (cfg.isSoap()) {
+            throw new OrchestrationException(ErrorCode.CONFIG_ERROR,
+                    "Route '" + routeId + "' is a SOAP operation; SOAP services are reloaded by restarting");
+        }
+
         if (camelContext.getRoute(routeId) != null) {
             camelContext.getRouteController().stopRoute(routeId);
             camelContext.removeRoute(routeId);
