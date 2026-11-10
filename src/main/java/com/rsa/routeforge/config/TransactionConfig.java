@@ -1,6 +1,7 @@
 package com.rsa.routeforge.config;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.rsa.routeforge.openapi.OpenApiValidationConfig;
 import com.rsa.routeforge.soap.SoapRouteConfig;
 
@@ -47,7 +48,8 @@ public record TransactionConfig(
                 httpMethod, responseJoltSpecRules, openApiValidation, null, null);
     }
 
-    /** Whether this route is an operation of a SOAP service. */
+    /** Whether this route is an operation of a SOAP service. Not a JSON property: it would clash with {@code soap}. */
+    @JsonIgnore
     public boolean isSoap() {
         return CHANNEL_SOAP.equals(channel);
     }

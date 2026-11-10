@@ -86,6 +86,13 @@ class SoapRouteConfigTest {
         assertTrue(validator.validate(cfg, "mibl.json").isEmpty(), () -> validator.validate(cfg, "mibl.json").toString());
     }
 
+    @Test
+    void soapRouteRoundTripsThroughJackson() throws Exception {
+        TransactionConfig cfg = mapper.readValue(MIBL_PROPOSAL, TransactionConfig.class);
+        TransactionConfig again = mapper.readValue(mapper.writeValueAsString(cfg), TransactionConfig.class);
+        assertEquals(cfg, again);
+    }
+
     // ------------------------------------------------------------------ validation
 
     @Test
