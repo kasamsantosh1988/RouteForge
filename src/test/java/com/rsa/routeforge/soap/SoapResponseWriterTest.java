@@ -92,11 +92,11 @@ class SoapResponseWriterTest {
 
     @Test
     void faultCarriesCodeStringAndDetailOnly() {
-        String xml = SoapResponseWriter.fault("Client", "Authentication failed.", "AUTHENTICATION_FAILED", "trace-1");
+        String xml = SoapResponseWriter.fault("Client", "Invalid user name or password", "INVALID_CREDENTIALS", "trace-1");
 
         assertEquals(DECL + "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\"><soapenv:Body>"
-                + "<soapenv:Fault><faultcode>soapenv:Client</faultcode><faultstring>Authentication failed.</faultstring>"
-                + "<detail><code>AUTHENTICATION_FAILED</code><traceId>trace-1</traceId></detail></soapenv:Fault>"
+                + "<soapenv:Fault><faultcode>soapenv:Client</faultcode><faultstring>Invalid user name or password</faultstring>"
+                + "<detail><code>INVALID_CREDENTIALS</code><traceId>trace-1</traceId></detail></soapenv:Fault>"
                 + ENV_CLOSE, xml);
         assertFalse(xml.contains("hostname"));
         parse(xml);
@@ -119,7 +119,7 @@ class SoapResponseWriterTest {
     void faultCodes() {
         assertEquals("VersionMismatch", SoapResponseWriter.faultCodeFor("SOAP_VERSION_MISMATCH", 400));
         assertEquals("Client", SoapResponseWriter.faultCodeFor("VALIDATION_FAILED", 400));
-        assertEquals("Client", SoapResponseWriter.faultCodeFor("AUTHENTICATION_FAILED", 401));
+        assertEquals("Client", SoapResponseWriter.faultCodeFor("INVALID_CREDENTIALS", 401));
         assertEquals("Server", SoapResponseWriter.faultCodeFor("DOWNSTREAM_TIMEOUT", 504));
     }
 

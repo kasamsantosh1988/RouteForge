@@ -3,14 +3,12 @@ package com.rsa.routeforge.soap;
 import com.rsa.routeforge.audit.RouteAuditRecord;
 import com.rsa.routeforge.config.EngineMetrics;
 import com.rsa.routeforge.config.TransactionConfig;
-import com.rsa.routeforge.error.ErrorCode;
 import com.rsa.routeforge.error.OrchestrationException;
 import com.rsa.routeforge.inbound.InboundCodec;
 import com.rsa.routeforge.route.RouteForgeProperties;
 import org.apache.camel.Exchange;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
@@ -24,9 +22,9 @@ import static com.rsa.routeforge.inbound.EngineHeaders.ENGINE_STATUS_HEADER;
  * The SOAP 1.1 wire format for routes with {@code "channel": "soap"}.
  * <p>
  * <b>Request:</b> the configured {@code soap.fields} are read from the operation element into
- * {@code ctx.input}, and the caller is authenticated before any step runs. The password field is
- * removed from the input once checked, so it cannot reach a step, a downstream call, a response or
- * a log line.
+ * {@code ctx.input}. The codec does not authenticate: partners behind APIM are authenticated there,
+ * and a login sent in the body is checked by a step of the route, typically a {@code call} to a
+ * credentials API with an {@code errorCheck}.
  * <p>
  * <b>Success:</b> HTTP 200 with the configured wrapper. The return value is {@code soapReturn}
  * from the response body (the context, or the output of the route's response JOLT); a plain string
@@ -48,13 +46,10 @@ public class SoapCodec implements InboundCodec {
     private static final String CONTENT_TYPE = "text/xml; charset=utf-8";
 
     private final RouteForgeProperties properties;
-    private final ObjectProvider<CredentialVerifier> verifier;
     private final EngineMetrics metrics;
 
-    public SoapCodec(RouteForgeProperties properties, ObjectProvider<CredentialVerifier> verifier,
-                     EngineMetrics metrics) {
+    public SoapCodec(RouteForgeProperties properties, EngineMetrics metrics) {
         this.properties = properties;
-        this.verifier = verifier;
         this.metrics = metrics;
     }
 
@@ -79,48 +74,8 @@ public class SoapCodec implements InboundCodec {
         soap.fieldsOrEmpty().forEach((name, path) ->
                 input.put(name, request.field(path, soap.namespacesOrEmpty(), soap.lenient())));
 
-        authenticate(cfg, soap, input, exchange);
         log.info("SOAP operation {} [{}]: {} field(s)", request.operationName(), cfg.routeId(), input.size());
         return input;
-    }
-
-    private void authenticate(TransactionConfig cfg, SoapRouteConfig soap, Map<String, Object> input, Exchange exchange) {
-        switch (soap.authType()) {
-            case SoapAuthConfig.BODY_CREDENTIALS -> {
-                SoapAuthConfig auth = soap.auth();
-                Object user = input.get(auth.user());
-                Object password = input.remove(auth.password());
-                CredentialVerifier check = verifier.getIfAvailable();
-                if (check == null) {
-                    throw new OrchestrationException(ErrorCode.CONFIG_ERROR,
-                            "route '" + cfg.routeId() + "' uses bodyCredentials but no CredentialVerifier bean exists");
-                }
-                boolean valid;
-                try {
-                    valid = check.verify(cfg.partnerCode(), asString(user), asString(password));
-                } catch (RuntimeException e) {
-                    throw new OrchestrationException(ErrorCode.INTERNAL_SERVER_ERROR,
-                            "CredentialVerifier failed for route '" + cfg.routeId() + "': " + e.getClass().getSimpleName(), e);
-                }
-                if (!valid) {
-                    throw new OrchestrationException(ErrorCode.AUTHENTICATION_FAILED,
-                            "invalid credentials for partner '" + cfg.partnerCode() + "', user '" + user + "'");
-                }
-            }
-            case SoapAuthConfig.GATEWAY -> {
-                String header = soap.auth() == null ? null : soap.auth().header();
-                if (header != null) {
-                    String value = exchange.getIn().getHeader(header, String.class);
-                    if (value == null || value.isBlank()) {
-                        throw new OrchestrationException(ErrorCode.AUTHENTICATION_FAILED,
-                                "gateway header '" + header + "' missing");
-                    }
-                }
-            }
-            default -> {
-                // none
-            }
-        }
     }
 
     @Override

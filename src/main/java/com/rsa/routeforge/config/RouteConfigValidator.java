@@ -2,7 +2,6 @@ package com.rsa.routeforge.config;
 
 import com.rsa.routeforge.error.OrchestrationException;
 import com.rsa.routeforge.soap.QNames;
-import com.rsa.routeforge.soap.SoapAuthConfig;
 import com.rsa.routeforge.soap.SoapResponseConfig;
 import com.rsa.routeforge.soap.SoapRouteConfig;
 import org.slf4j.Logger;
@@ -260,19 +259,6 @@ public class RouteConfigValidator {
                 checkQName(step, ns, where + ": soap.fields." + name, errors);
             }
         });
-
-        String authType = soap.authType();
-        if (!SoapAuthConfig.TYPES.contains(authType)) {
-            errors.add(where + ": unknown soap.auth.type '" + authType + "', expected one of " + SoapAuthConfig.TYPES);
-        } else if (SoapAuthConfig.BODY_CREDENTIALS.equals(authType)) {
-            SoapAuthConfig auth = soap.auth();
-            if (isBlank(auth.user()) || !fields.containsKey(auth.user())) {
-                errors.add(where + ": soap.auth.user must name an entry of soap.fields");
-            }
-            if (isBlank(auth.password()) || !fields.containsKey(auth.password())) {
-                errors.add(where + ": soap.auth.password must name an entry of soap.fields");
-            }
-        }
 
         SoapResponseConfig response = soap.response();
         if (response == null) {

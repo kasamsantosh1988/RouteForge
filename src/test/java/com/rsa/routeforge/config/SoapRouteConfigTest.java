@@ -30,7 +30,6 @@ class SoapRouteConfigTest {
                 "operation": "web:MIBLProposalInfo",
                 "namespaces": { "web": "http://WebService.vam.com/" },
                 "fields": { "data": "miblProposalData", "userName": "soapHeader/userName", "password": "soapHeader/password" },
-                "auth": { "type": "bodyCredentials", "user": "userName", "password": "password" },
                 "response": { "element": "web:MIBLProposalInfoResponse", "returnElement": "return", "returnQualified": false },
                 "publicUrl": "https://pie.example/ws/mibl/MiblWebSystem"
               }
@@ -81,7 +80,6 @@ class SoapRouteConfigTest {
         assertTrue(cfg.isSoap());
         assertEquals("web:MIBLProposalInfo", cfg.soap().operation());
         assertEquals("soapHeader/userName", cfg.soap().fields().get("userName"));
-        assertEquals("bodyCredentials", cfg.soap().authType());
         assertFalse(cfg.soap().response().qualifiedReturn());
         assertTrue(validator.validate(cfg, "mibl.json").isEmpty(), () -> validator.validate(cfg, "mibl.json").toString());
     }
@@ -102,12 +100,6 @@ class SoapRouteConfigTest {
                 .replace("\"soapHeader/userName\"", "\"y:soapHeader/userName\""));
         assertTrue(errors.stream().anyMatch(e -> e.contains("soap.operation") && e.contains("'x'")), errors.toString());
         assertTrue(errors.stream().anyMatch(e -> e.contains("soap.fields.userName") && e.contains("'y'")), errors.toString());
-    }
-
-    @Test
-    void bodyCredentialsMustNameConfiguredFields() throws Exception {
-        List<String> errors = validate(MIBL_PROPOSAL.replace("\"password\": \"password\"", "\"password\": \"pwd\""));
-        assertTrue(errors.stream().anyMatch(e -> e.contains("soap.auth.password")), errors.toString());
     }
 
     @Test

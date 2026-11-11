@@ -19,7 +19,6 @@ public enum ErrorCode {
     SOAP_REQUEST_TOO_LARGE(400, "The request exceeds the allowed size."),
     SOAP_UNKNOWN_OPERATION(400, "The requested operation is not supported."),
     SOAP_UNSUPPORTED_MEDIA_TYPE(400, "Content-Type must be text/xml."),
-    AUTHENTICATION_FAILED(401, "Authentication failed."),
 
     // ---- Downstream (5xx) ----------------------------------------------------
     DOWNSTREAM_TIMEOUT(504, "An upstream service did not respond in time."),

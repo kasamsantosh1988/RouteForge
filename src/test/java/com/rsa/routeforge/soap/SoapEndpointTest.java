@@ -28,8 +28,8 @@ class SoapEndpointTest {
             </wsdl:port></wsdl:service></wsdl:definitions>
             """;
 
-    private final SoapTestSupport t = new SoapTestSupport();
     private final DefaultCamelContext camel = new DefaultCamelContext();
+    private final SoapTestSupport t = new SoapTestSupport(camel);
 
     @AfterEach
     void tearDown() {
@@ -155,11 +155,11 @@ class SoapEndpointTest {
     }
 
     private SoapService service(String publicUrl) {
-        TransactionConfig proposal = withWsdl(SoapTestSupport.miblRoute(SoapTestSupport.bodyCredentials()), publicUrl);
+        TransactionConfig proposal = withWsdl(SoapTestSupport.miblRoute(), publicUrl);
         SoapRouteConfig p = proposal.soap();
         SoapRouteConfig paymentSoap = new SoapRouteConfig("web:MIBLPaymentInfo", p.namespaces(), null,
                 Map.of("data", "miblPaymentData", "userName", "soapHeader/userName", "password", "soapHeader/password"),
-                p.auth(), new SoapResponseConfig("web:MIBLPaymentInfoResponse", "return", false, null, null, null),
+                new SoapResponseConfig("web:MIBLPaymentInfoResponse", "return", false, null, null, null),
                 p.wsdl(), p.publicUrl());
         TransactionConfig payment = new TransactionConfig("mibl-payment", proposal.path(), "MIBL", null,
                 proposal.steps(), null, null, "POST", null, null, TransactionConfig.CHANNEL_SOAP, paymentSoap);
@@ -169,7 +169,7 @@ class SoapEndpointTest {
     private static TransactionConfig withWsdl(TransactionConfig cfg, String publicUrl) {
         SoapRouteConfig s = cfg.soap();
         SoapRouteConfig soap = new SoapRouteConfig(s.operation(), s.namespaces(), s.lenientNamespaces(), s.fields(),
-                s.auth(), s.response(), "classpath:mibl.wsdl", publicUrl);
+                s.response(), "classpath:mibl.wsdl", publicUrl);
         return new TransactionConfig(cfg.routeId(), cfg.path(), cfg.partnerCode(), null, cfg.steps(), null, null,
                 "POST", null, null, cfg.channel(), soap);
     }
