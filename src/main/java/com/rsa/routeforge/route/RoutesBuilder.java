@@ -148,7 +148,7 @@ public class RoutesBuilder extends RouteBuilder {
             return null;
         }
         return new SoapRouteConfig(soap.operation(), soap.namespaces(), soap.lenientNamespaces(), soap.fields(),
-                soap.auth(), soap.response(),
+                soap.response(),
                 soap.wsdl() == null ? null : env.resolvePlaceholders(soap.wsdl()),
                 soap.publicUrl() == null ? null : env.resolvePlaceholders(soap.publicUrl()));
     }

@@ -7,6 +7,10 @@ import java.util.Map;
 /**
  * The {@code soap} block of a route file whose {@code channel} is {@code soap}. One route file is
  * one operation; route files that share a {@code path} form one SOAP service.
+ * <p>
+ * There is no authentication setting: partners behind APIM are authenticated there, and a partner
+ * that sends a user and password in the body is checked by a step of the route (typically a
+ * {@code call} to a credentials API with an {@code errorCheck}), like any other business rule.
  *
  * @param operation         qualified name of the body element that selects this operation,
  *                          for example {@code web:MIBLProposalInfo}
@@ -18,7 +22,6 @@ import java.util.Map;
  * @param fields            name in {@code ctx.input} to a path under the operation element, with
  *                          {@code /} between steps; an unprefixed step means "no namespace",
  *                          for example {@code prop:shIn/auth:userName} or {@code soapHeader/userName}
- * @param auth              how the caller is authenticated; default {@code none}
  * @param response          shape of the success response
  * @param wsdl              resource location of the WSDL served at {@code <path>?wsdl}
  * @param publicUrl         endpoint address written into the served WSDL
@@ -28,7 +31,6 @@ public record SoapRouteConfig(
         Map<String, String> namespaces,
         Boolean lenientNamespaces,
         Map<String, String> fields,
-        SoapAuthConfig auth,
         SoapResponseConfig response,
         String wsdl,
         String publicUrl) {
@@ -47,9 +49,5 @@ public record SoapRouteConfig(
 
     public Map<String, String> fieldsOrEmpty() {
         return fields == null ? Map.of() : fields;
-    }
-
-    public String authType() {
-        return auth == null || auth.type() == null ? SoapAuthConfig.NONE : auth.type();
     }
 }

@@ -8,7 +8,7 @@ RouteForge can now expose **SOAP 1.1 APIs** next to its JSON APIs. A SOAP API is
 | --- | --- |
 | 1. Inbound codec | Request parsing and response writing moved out of the engine behind `InboundCodec`; JSON behaviour unchanged |
 | 2. XML core | Hardened XML reader and a SOAP 1.1 response and fault writer |
-| 3. SOAP channel | `channel` and `soap` on route files, dispatch by body element, `?wsdl`, partner login check |
+| 3. SOAP channel | `channel` and `soap` on route files, dispatch by body element, `?wsdl` |
 | 4. Audit and metrics | Credentials masked in XML audit payloads; SOAP fault counter |
 
 **Behaviour change for existing JSON routes: none.** Bima Sugam and every other JSON route keep the same request handling, response envelope, status codes, encryption and audit (one audit edge case, an XML body sent to a JSON route, is listed under Changed). SOAP is **off by default** (`routeforge.soap.enabled=false`).
@@ -28,17 +28,17 @@ RouteForge can now expose **SOAP 1.1 APIs** next to its JSON APIs. A SOAP API is
 
 1. Add the partner's WSDL under resources, for example `partners/mibl/MiblWebSystem.wsdl`.
 2. Add one route file per operation (sample below), all with the same `path`.
-3. If any operation uses `bodyCredentials`, provide a `CredentialVerifier` bean.
+3. If the partner sends a user and password in the body, start each operation with a `call` step to your credentials API and an `errorCheck` (see Partner authentication). Partners authenticated by APIM need no such step.
 4. Set `routeforge.soap.enabled=true`.
 5. Point APIM or the load balancer at `<path>`; partners fetch the WSDL from `<public URL>?wsdl`.
 
 ### Added
 
 - **Part 1:** `InboundCodec`, `JsonCodec` (today's JSON behaviour, moved verbatim), `InboundCodecRegistry`, `EngineHeaders`; GitHub Actions build (`mvn verify` on JDK 25).
-- **Part 2:** `SafeXmlReader`, `SoapRequest`, `SoapResponseWriter`, `SoapLimits`, `QNames`; config records `SoapRouteConfig`, `SoapAuthConfig`, `SoapResponseConfig`; the `CredentialVerifier` interface.
+- **Part 2:** `SafeXmlReader`, `SoapRequest`, `SoapResponseWriter`, `SoapLimits`, `QNames`; config records `SoapRouteConfig`, `SoapResponseConfig`.
 - **Part 3:** `SoapCodec`, `SoapService`, `SoapEndpoint`, `SoapExchange`; `channel` and `soap` on `TransactionConfig`; `routeforge.soap.*` properties.
 - **Part 4:** XML masking in `AuditPayloadSanitizer`; `engine.soap.faults` counter.
-- Error codes: `SOAP_MALFORMED`, `SOAP_VERSION_MISMATCH`, `SOAP_REQUEST_TOO_LARGE`, `SOAP_UNKNOWN_OPERATION`, `SOAP_UNSUPPORTED_MEDIA_TYPE`, `AUTHENTICATION_FAILED`.
+- Error codes: `SOAP_MALFORMED`, `SOAP_VERSION_MISMATCH`, `SOAP_REQUEST_TOO_LARGE`, `SOAP_UNKNOWN_OPERATION`, `SOAP_UNSUPPORTED_MEDIA_TYPE`.
 
 ### Changed
 
@@ -116,7 +116,6 @@ The engine owns everything between parsing and writing; a codec only works at th
       "userName": "soapHeader/userName",
       "password": "soapHeader/password"
     },
-    "auth": { "type": "bodyCredentials", "user": "userName", "password": "password" },
     "response": {
       "element": "web:MIBLProposalInfoResponse",
       "returnElement": "return",
@@ -127,7 +126,16 @@ The engine owns everything between parsing and writing; a codec only works at th
     "wsdl": "classpath:partners/mibl/MiblWebSystem.wsdl",
     "publicUrl": "${pie.public-url}/ws/mibl/MiblWebSystem"
   },
-  "steps": [ ... ]
+  "steps": [
+    {
+      "id": "verifyLogin", "type": "call", "method": "POST",
+      "uri": "${pie.credentials-api}/verify",
+      "responseVariable": "login",
+      "errorCheck": { "condition": "['valid'] == false", "codeField": "code", "messageField": "message",
+                      "defaultCode": "INVALID_CREDENTIALS", "httpStatus": 401 }
+    },
+    { "id": "decode", "type": "businessLogic", "beanRef": "..." }
+  ]
 }
 ```
 
@@ -138,9 +146,6 @@ The engine owns everything between parsing and writing; a codec only works at th
 | `soap.namespaces` | Prefix to URI. Prefixes are config-only; partners may use any prefixes on the wire | None |
 | `soap.lenientNamespaces` | Match fields (and, as a fallback, the operation) by local name only | `false` |
 | `soap.fields` | Name in `ctx.input` to a path under the operation element. Steps are separated by `/`; an unprefixed step means "no namespace". One match gives its value, several give a list, none gives `null`. An element with children gives a map | At least one |
-| `soap.auth.type` | `bodyCredentials`, `gateway` or `none` | `none` |
-| `soap.auth.user`, `soap.auth.password` | For `bodyCredentials`: the `fields` entries holding the login | Required for `bodyCredentials` |
-| `soap.auth.header` | For `gateway`: a header that must be present | None |
 | `soap.response.element` | Qualified name of the response wrapper | Required |
 | `soap.response.returnElement` | Local name of the single child carrying the value | Required |
 | `soap.response.returnQualified` | Return element in the wrapper's namespace (Maruti) or none (MIBL, written with `xmlns=""`) | `true` |
@@ -150,7 +155,7 @@ The engine owns everything between parsing and writing; a codec only works at th
 | `soap.wsdl` | Resource served at `<path>?wsdl`. Placeholders allowed | None (then `?wsdl` is 404) |
 | `soap.publicUrl` | Written into the served WSDL's `soap:address`. Placeholders allowed | WSDL served unchanged |
 
-Rules checked at startup: SOAP routes are POST only and cannot use `encryptionProfile` or `openApiValidation`; every prefix must be declared; `bodyCredentials` must name configured fields; routes on one path must share `partnerCode`, `wsdl` and `publicUrl`, and each operation element may appear once; a REST route and a SOAP service cannot share a path.
+Rules checked at startup: SOAP routes are POST only and cannot use `encryptionProfile` or `openApiValidation`; every prefix must be declared; routes on one path must share `partnerCode`, `wsdl` and `publicUrl`, and each operation element may appear once; a REST route and a SOAP service cannot share a path.
 
 ### Properties
 
@@ -168,7 +173,7 @@ Rules checked at startup: SOAP routes are POST only and cannot use `encryptionPr
 3. Parsing (`SafeXmlReader`): DTDs off and any `DOCTYPE` rejected (blocks XXE and entity expansion), external entities off, size, depth and element limits. The envelope must be SOAP 1.1 with exactly one element in `Body`. The SOAP `Header` is ignored.
 4. The body element's namespace and name select the operation (exact match, then lenient operations by local name).
 5. A request no operation can take still runs through the engine under the service's own config (route id `soap:<path>`), so it is answered with a fault and audited.
-6. `SoapCodec` reads `soap.fields` into `ctx.input` and authenticates before any step runs. With `bodyCredentials`, the password field is removed from `ctx.input` once checked, so it never reaches a step, downstream call, response or log.
+6. `SoapCodec` reads `soap.fields` into `ctx.input`. It does not authenticate; that is a step of the route when the partner needs it.
 
 ### SOAP responses
 
@@ -178,7 +183,7 @@ Rules checked at startup: SOAP routes are POST only and cannot use `encryptionPr
 | Engine error | Fault code | Fault string |
 | --- | --- | --- |
 | `SOAP_VERSION_MISMATCH` | `VersionMismatch` | Only SOAP 1.1 is supported. |
-| Any status below 500 (malformed XML, unknown operation, authentication, validation) | `Client` | The error's client-safe message |
+| Any status below 500 (malformed XML, unknown operation, a failed login check, validation) | `Client` | The error's client-safe message, or the `errorCheck` message of the failing step |
 | 500 and above (configuration, downstream, unexpected) | `Server` | The error's client-safe message, for example "An unexpected error occurred." |
 
 The fault `detail` carries only the error code and trace id: no host name, stack trace or request content.
@@ -195,20 +200,28 @@ Sample success responses, exactly as written:
 
 ### Partner authentication
 
-`CredentialVerifier` is implemented in PIE:
+The engine does not check partner credentials. Partners behind APIM are authenticated there. For a partner that sends a user and password in the body, the route checks them like any other business rule: a `call` step to the credentials API, first in the route, with an `errorCheck`.
 
-```java
-@Component
-public class PartnerCredentialVerifier implements CredentialVerifier {
-    @Override
-    public boolean verify(String partnerCode, String userName, String password) {
-        // look up the partner's credentials and compare in constant time,
-        // e.g. MessageDigest.isEqual(expectedBytes, passwordBytes); never log the password
-    }
+```json
+{
+  "id": "verifyLogin",
+  "type": "call",
+  "method": "POST",
+  "uri": "${pie.credentials-api}/verify",
+  "responseVariable": "login",
+  "errorCheck": {
+    "condition": "['valid'] == false",
+    "codeField": "code",
+    "messageField": "message",
+    "defaultCode": "INVALID_CREDENTIALS",
+    "httpStatus": 401
+  }
 }
 ```
 
-A wrong login is a `Client` fault with `AUTHENTICATION_FAILED`; a missing verifier or one that throws is a `Server` fault. For partners authenticated by APIM, use `gateway` (optionally requiring a header) or `none`.
+- The step sends `ctx.input` (or the output of its `requestJoltSpec`) to the credentials API. Use a `requestJoltSpec` to send only `userName` and `password`.
+- When the condition is true, the route stops and the partner gets a `Client` fault with the configured code and the API's message. Steps after it do not run.
+- The password stays in `ctx.input` for the rest of the route. Set `engine.audit.mask-fields=password` so it is masked in the step-call audit of the JSON sent downstream; XML request audit masks it regardless. Payload logging (`engine.logging.payloads`) should stay off in production.
 
 ### Audit, logging and metrics
 
@@ -249,7 +262,7 @@ This is the behaviour pinned by `JsonInboundBehaviourTest`, unchanged from befor
 | `InboundCodecRegistryTest`, `InboundCodecRoutingTest` | Codec selection; a non-JSON codec end to end; other routes stay JSON |
 | `SoapRequestTest` | Maruti and MIBL envelopes, namespaces strict and lenient, wire prefixes, repeated elements, nil, envelope rules, XXE, entity expansion, DOCTYPE, size, depth and element limits |
 | `SoapResponseWriterTest` | Exact Maruti and MIBL response bytes, `ns1` style, escaping, CDATA splitting, faults |
-| `SoapCodecEngineTest` | Through the engine: success for both partners, password never reaches a step, wrong login, missing or failing verifier, gateway header, malformed XML, no context leak |
+| `SoapCodecEngineTest` | Through the engine: success for both partners with the login checked by a `call` step to a stand-in credentials API, a rejected login as a `Client` fault with later steps skipped, a partner with no login step, malformed XML, no context leak |
 | `SoapEndpointTest` | Dispatch by body element across two operations, unknown operation, content types, GET without `?wsdl`, WSDL serving and address rewrite, 404 |
 | `SoapRouteConfigTest` | Parsing old and new route files, validation errors, loading and grouping by path, REST duplicate paths still rejected, SOAP disabled |
 | `AuditPayloadSanitizerXmlTest` | Password masking with and without prefixes, configured fields, malformed XML, CDATA; JSON behaviour unchanged |
